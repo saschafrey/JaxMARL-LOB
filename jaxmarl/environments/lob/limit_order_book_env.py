@@ -17,33 +17,45 @@ import math
 
 """Environment adapted from SMAX env, currently just a skeleton for what a LOB MARL environment should look like."""
 
+@dataclass
+class ExecAgentState:
+    inv_to_execute: chex.Array
+    cash: chex.Array
 
+class MMAgentState :
+    cash: chex.Array
+
+#Question: if attribute applies to all agensts, should it be in the state or in the agent state?
 
 @dataclass
 class State:
-
-    order_book: chex.Array
+    "Should include all state variables for the 'world'"
+    order_book: chex.Array #LOB (World) specific
     trades: chex.Array
-    agent_positions: chex.Array
-    time: int
+    time: int #Simulation specific
     terminal: bool
+    execStates: ExecAgentStates #Agent specific
+    #NOTE: If attributes of state apply only to a subset of agents they should be included in the
 
 
 @dataclass
 class Scenario:
     agent_types: chex.Array
-    num_trading_agents: int #Experimental agents we care about
-    num_auxillary_agents: int #E.g. exchange, logging, worldagents, 
+    num_rl_agents: int #Experimental agents we care about
     bool_option_1: bool
-    bool_option_2: bool
+    bool_option_2: bool 
+    #Do we want to add the per-agent config here?
+
+#Allow for the option to give a tree of configs for all of the agents or simply default to the same config for each agent type.
 
 
 EXPERIMENT_NAME_TO_SCENARIO = {
     # name: (trader_types, num_liq_takers, num_liq_providers, bool_option_1, bool_option_2)
-    "optexVSmm": Scenario(jnp.array([0,1,2], dtype=jnp.uint8), 2, 1, False, False),
-    "optexVSdirVSmm": Scenario(jnp.array([0,1,2,3], dtype=jnp.uint8), 3, 1, False, False),
+    "optexVSmm": Scenario(jnp.array([0,1], dtype=jnp.uint8), 2, False, False),
+    "optexVSdirVSmm": Scenario(jnp.array([0,1,2], dtype=jnp.uint8), 3, False, False),
 }
 
+#Question: how do we allow for custom values for a given agent type?
 
 def map_name_to_scenario(exp_name):
     """maps from smac map names to a scenario array"""
@@ -58,27 +70,24 @@ class LOB_MARL(MultiAgentEnv):
     def __init__(
         self,
         num_trading_agents=1,
-        num_auxillary_agents=1,
-
-        messages_per_env_step=8,
-        time_per_step=1.0 / 16,
+        simulation_config=None,
+        jaxlob_config=None,
         scenario=None,
         agent_type_names=[
             "market_making",
             "directional_trader",
             "optimal_execution",
-            "data_replay",
-            "world_agent",
         ],
-        agent_type_shorthands=["mm", "dt", "ox", "dr", "wa"],
-        agent_type_setting_1=jnp.array([3.15, 2.25, 4.13, 3.15, 4.13, 3.15]),
+        agent_configs=None, #Config 
+        agent_type_shorthands=["mm", "dt", "ox"],
+        agent_type_setting_1=jnp.array([3.15, 2.25, 4.13]),
         reward_option_1=False,
         observation_type="unit_list",
         action_type="discrete",
+        #is this where we'd be expected to put all the configs? 
     ) -> None:
         self.num_trading_agents = num_trading_agents if scenario is None else scenario.num_trading_agents
-        self.num_auxillary_agents = num_auxillary_agents if scenario is None else scenario.num_auxillary_agents
-        self.num_agents = self.num_trading_agents + self.num_auxillary_agents
+        self.num_agents = self.num_trading_agents
         self.agent_type_names = agent_type_names
         self.agent_type_shorthands = agent_type_shorthands
         self.agent_type_setting_1 = agent_type_setting_1
@@ -89,16 +98,9 @@ class LOB_MARL(MultiAgentEnv):
             self.num_trading_agents,
             len(self.agent_type_names),
         )
-        self.agents = [f"ally_{i}" for i in range(self.num_allies)] + [
-            f"enemy_{i}" for i in range(self.num_enemies)
-        ]
-        self.agent_ids = {agent: i for i, agent in enumerate(self.agents)}
-        self.teams = jnp.zeros((self.num_agents,), dtype=jnp.uint8)
-        self.teams = self.teams.at[self.num_allies :].set(1)
+        self.agents = [f"agent_{i}" for i in range(self.num_agents)]
+        self.agent_ids = {agent: i for i, agent in enumerate(self.agents)} #should probably be made so it's compatible with the TradeID
         self.observation_type = observation_type
-        self.max_units_per_section = 2
-        self.num_sections = 32
-        self.action_type = action_type
         self.continuous_action_dims = [
             "shoot_last_enemy",
             "do_shoot",
@@ -124,12 +126,19 @@ class LOB_MARL(MultiAgentEnv):
         self.observation_spaces = {
             i: Box(low=0.0, high=1.0, shape=(self.obs_size,)) for i in self.agents
         }
-        self.num_ally_actions = self.num_enemies + self.num_movement_actions
-        self.num_enemy_actions = self.num_allies + self.num_movement_actions
+        self.num_actions = 
         self.action_spaces = {
             agent: self._get_individual_action_space(i)
             for i, agent in enumerate(self.agents)
         }
+
+        action_spaces =[]
+        for t in agent_type_names:
+            action_spaces.append({
+            agent: self._get_individual_action_space(i)
+            for i, agent in enumerate(self.agents)
+                })
+            
 
     def _get_individual_action_space(self, i):
         if self.action_type == "discrete":
