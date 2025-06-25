@@ -34,13 +34,19 @@ class ScannedRNN(nn.Module):
     def __call__(self, carry, x):
         """Applies the module."""
         rnn_state = carry
+        print("State before",rnn_state)
         ins, resets = x
+        print("Input to RNN",ins)
+        print("Resets",resets)
         rnn_state = jnp.where(
             resets[:, np.newaxis],
             self.initialize_carry(*rnn_state.shape),
             rnn_state,
         )
+        print("State after",rnn_state)
         new_rnn_state, y = nn.GRUCell(features=ins.shape[1])(rnn_state, ins)
+        print("New state",new_rnn_state)
+
         return new_rnn_state, y
 
     @staticmethod
@@ -170,6 +176,11 @@ def make_train(config):
         reset_rng = jax.random.split(_rng, config["NUM_ENVS"])
         obsv, env_state = jax.vmap(env.reset, in_axes=(0,))(reset_rng)
         init_hstate = ScannedRNN.initialize_carry(config["NUM_ACTORS"], config["GRU_HIDDEN_DIM"])
+        print(f"Initial hstate {init_hstate}")
+        
+
+
+
         # TRAIN LOOP
         def _update_step(update_runner_state, unused):
             # COLLECT TRAJECTORIES
@@ -190,22 +201,32 @@ def make_train(config):
                     last_done[np.newaxis, :],
                     avail_actions,
                 )
+                print(f"The obs given to the network is {obs_batch}")
+                print(f"The hidden state given to the network is {hstate}")
+                print(f"The ac_in  given to the network is {ac_in}")
                 hstate, pi, value = network.apply(train_state.params, hstate, ac_in)
                 action = pi.sample(seed=_rng)
                 log_prob = pi.log_prob(action)
+                print(f"Action sampled by the network {action}")
                 env_act = unbatchify(
                     action, env.agents, config["NUM_ENVS"], env.num_agents
                 )
                 env_act = {k: v.squeeze() for k, v in env_act.items()}
-
+                print(f"Action taken by the agent given to the env {env_act}")
                 # STEP ENV
                 rng, _rng = jax.random.split(rng)
                 rng_step = jax.random.split(_rng, config["NUM_ENVS"])
                 obsv, env_state, reward, done, info = jax.vmap(
                     env.step, in_axes=(0, 0, 0)
                 )(rng_step, env_state, env_act)
+
+                print("Done shape",done)
+
                 info = jax.tree.map(lambda x: x.reshape((config["NUM_ACTORS"])), info)
                 done_batch = batchify(done, env.agents, config["NUM_ACTORS"]).squeeze()
+
+                print("Done batch shape", done_batch)
+                print("Tile",jnp.tile(done["__all__"], env.num_agents))
                 transition = Transition(
                     jnp.tile(done["__all__"], env.num_agents),
                     last_done,
@@ -217,6 +238,7 @@ def make_train(config):
                     info,
                     avail_actions,
                 )
+                print("Transition", transition)
                 runner_state = (train_state, env_state, obsv, done_batch, hstate, rng)
                 return runner_state, transition
 
@@ -395,6 +417,8 @@ def make_train(config):
                 ),
                 traj_batch.info,
             )
+            print("Metrics are \n", metric)
+
             ratio_0 = loss_info[1][3].at[0,0].get().mean()
             loss_info = jax.tree.map(lambda x: x.mean(), loss_info)
             metric["loss"] = {
